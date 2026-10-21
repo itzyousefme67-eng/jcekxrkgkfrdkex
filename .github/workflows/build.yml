@@ -1,0 +1,95 @@
+name: Build JAR
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Extract ZIP files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find . -type f -iname '*.zip' \
+            -not -path './.git/*' \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
+            -not -path '*-extracted/*' \
+            -print0 |
+          while IFS= read -r -d '' zipfile; do
+            dest="${zipfile%.zip}-extracted"
+            mkdir -p "$dest"
+            unzip -o "$zipfile" -d "$dest"
+          done
+
+      - name: Find project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUILD_FILE=$(find . -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            -not -path './.git/*' \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
+            -not -path '*-extracted/*' \
+            -print -quit)
+
+          if [ -z "$BUILD_FILE" ]; then
+            BUILD_FILE=$(find . -type f \
+              \( -name build.gradle -o -name build.gradle.kts \) \
+              -not -path './.git/*' \
+              -not -path '*/.gradle/*' \
+              -not -path '*/build/*' \
+              -print -quit)
+          fi
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: No Gradle build file found, even after extracting ZIP files."
+            echo "Repository files:"
+            find . -maxdepth 4 -type f | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$BUILD_FILE")
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project directory: $PROJECT_DIR"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build JAR
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          set -euo pipefail
+
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew build --stacktrace --no-daemon
+          else
+            gradle build --stacktrace --no-daemon
+          fi
+
+      - name: Upload JAR files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Minecraft-Mod-JAR
+          path: '**/build/libs/*.jar'
+          if-no-files-found: error
